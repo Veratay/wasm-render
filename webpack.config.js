@@ -5,9 +5,13 @@ const path = require("path");
 
 module.exports = (env, args) => {
   const isProductionMode = args.mode === "production";
+  const entry = {
+    app: "./index.js",
+    tests: "./tests/browser/tests.js",
+  };
 
   return {
-    entry: "./index.js",
+    entry,
     output: {
       path: path.resolve(__dirname, "dist"),
       filename: isProductionMode
@@ -17,6 +21,13 @@ module.exports = (env, args) => {
     plugins: [
       new HtmlWebpackPlugin({
         template: "index.html",
+        filename: "index.html",
+        chunks: ["app"],
+      }),
+      new HtmlWebpackPlugin({
+        template: "tests/browser/index.html",
+        filename: "tests/index.html",
+        chunks: ["tests"],
       }),
       new WasmPackPlugin({
         crateDirectory: path.resolve(__dirname, "."),
@@ -40,4 +51,3 @@ module.exports = (env, args) => {
     },
   };
 };
-

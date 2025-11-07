@@ -1,7 +1,9 @@
 {
     "scripts": {
         "build": "webpack --mode production",
-        "dev": "webpack-dev-server --mode development --port 9000 --open"
+        "dev": "webpack-dev-server --mode development --port 9000 --open",
+        "dev:tests": "webpack-dev-server --mode development --port 9001 --open /tests/index.html",
+        "test:browser": "webpack --mode production && echo \"Open dist/tests/index.html in a browser to view results\""
     },
     "devDependencies": {
         "@wasm-tool/wasm-pack-plugin": "1.7.0",

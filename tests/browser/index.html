@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Renderer Browser Tests</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            margin: 1.5rem;
+            background: #f9f9fb;
+        }
+        h1 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+        #summary.pass {
+            color: #0a0;
+        }
+        #summary.fail {
+            color: #c00;
+        }
+        ul {
+            padding-left: 1rem;
+        }
+        li {
+            margin-bottom: 0.35rem;
+        }
+        li.pass {
+            color: #065f46;
+        }
+        li.fail {
+            color: #b91c1c;
+            font-weight: 600;
+        }
+        #canvas-panel {
+            margin-top: 2rem;
+        }
+        #canvas-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem;
+        }
+        .canvas-wrapper {
+            background: #fff;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 0.5rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+        }
+        .canvas-wrapper.pass {
+            border-color: #22c55e;
+        }
+        .canvas-wrapper.fail {
+            border-color: #ef4444;
+        }
+        .canvas-wrapper h3 {
+            margin: 0 0 0.25rem 0;
+            font-size: 0.9rem;
+            color: #374151;
+        }
+        .canvas-wrapper canvas {
+            display: block;
+            width: 200px;
+            height: 200px;
+            border-radius: 4px;
+            background: #111827;
+        }
+        @media (max-width: 600px) {
+            .canvas-wrapper canvas {
+                width: 100%;
+                height: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Renderer Browser Tests</h1>
+    <p id="summary">Preparing tests…</p>
+    <ul id="results"></ul>
+    <section id="canvas-panel">
+        <h2>Test Canvases</h2>
+        <div id="canvas-gallery"></div>
+    </section>
+    <script type="module" src="./tests.js"></script>
+</body>
+</html>
