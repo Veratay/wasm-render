@@ -58,6 +58,14 @@ pub fn fragment_shader_source() -> &'static str {
     FRAGMENT_SHADER_SOURCE
 }
 
+pub fn timeseries_vertex_shader_source() -> &'static str {
+    TIMESERIES_VERTEX_SHADER_SOURCE
+}
+
+pub fn timeseries_fragment_shader_source() -> &'static str {
+    TIMESERIES_FRAGMENT_SHADER_SOURCE
+}
+
 const VERTEX_SHADER_SOURCE: &str = r#"
 precision mediump float;
 attribute vec3 a_position;
@@ -88,5 +96,23 @@ varying vec4 v_color;
 
 void main() {
     gl_FragColor = v_color;
+}
+"#;
+
+const TIMESERIES_VERTEX_SHADER_SOURCE: &str = r#"
+precision mediump float;
+attribute vec2 a_position;
+
+void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+}
+"#;
+
+const TIMESERIES_FRAGMENT_SHADER_SOURCE: &str = r#"
+precision mediump float;
+uniform vec4 u_color;
+
+void main() {
+    gl_FragColor = u_color;
 }
 "#;

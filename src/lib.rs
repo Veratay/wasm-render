@@ -11,6 +11,7 @@ mod batcher;
 mod camera;
 mod instances;
 mod shader;
+mod timeseries;
 
 use batcher::{COLOR_COMPONENTS, MATRIX_FLOATS, MESH_VERTEX_STRIDE, Mesh, POSITION_COMPONENTS};
 use camera::{orbit_view_matrix, perspective_matrix};
@@ -642,11 +643,11 @@ fn vec3_from_array(array: &Float32Array) -> Result<[f32; 3], JsValue> {
     Ok(out)
 }
 
-fn clamp_unit(value: f32) -> f32 {
+pub(crate) fn clamp_unit(value: f32) -> f32 {
     value.max(0.0).min(1.0)
 }
 
-fn error(message: &str) -> JsValue {
+pub(crate) fn error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
 

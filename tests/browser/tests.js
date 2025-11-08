@@ -126,6 +126,72 @@ const tests = [
             );
         },
     },
+    {
+        label: "Shared Canvas Modes",
+        slug: slugify("Shared Canvas Modes"),
+        async run() {
+            await runSharedCanvasTest();
+        },
+    },
+    {
+        label: "Timeseries Graph Mode",
+        slug: slugify("Timeseries Graph Mode"),
+        async run() {
+            await withTimeseriesRenderer("Timeseries Graph Mode", async ({ renderer, canvas }) => {
+                canvas.style.width = "320px";
+                canvas.style.height = "200px";
+                resizeRendererForCanvas(renderer, canvas, 320, 200);
+
+                const timestamps = buildTimeAxis(240, 0.1);
+                const redSeries = mapSeries(timestamps, (t) => 55 + 18 * Math.sin(t * 0.4));
+                const blueSeries = mapSeries(
+                    timestamps,
+                    (t) => 48 + 14 * Math.cos(t * 0.27 + 0.6),
+                );
+                const greenSeries = mapSeries(
+                    timestamps,
+                    (_, index) => 30 + ((index % 60) / 60) * 20,
+                );
+
+                const series = [
+                    {
+                        values: redSeries,
+                        color: new Float32Array([0.95, 0.34, 0.2, 1]),
+                        lineWidth: 2,
+                    },
+                    {
+                        values: blueSeries,
+                        color: new Float32Array([0.2, 0.62, 0.94, 1]),
+                        lineWidth: 1.5,
+                    },
+                    {
+                        values: greenSeries,
+                        color: new Float32Array([0.32, 0.84, 0.54, 0.9]),
+                    },
+                ];
+
+                renderer.set_series(timestamps, series);
+                renderer.clear(0.02, 0.02, 0.05, 1);
+                renderer.draw();
+
+                if (renderer.series_count() !== series.length) {
+                    throw new Error("series_count should match provided series length");
+                }
+                if (renderer.sample_count() !== timestamps.length) {
+                    throw new Error("sample_count should match timestamp length");
+                }
+
+                const timeDomain = renderer.time_domain();
+                const valueDomain = renderer.value_domain();
+                if (timeDomain.length < 2 || timeDomain[1] <= timeDomain[0]) {
+                    throw new Error("time_domain must be ascending");
+                }
+                if (valueDomain.length < 2 || valueDomain[1] <= valueDomain[0]) {
+                    throw new Error("value_domain must be ascending");
+                }
+            });
+        },
+    },
 ];
 
 runAllTests().catch((err) => {
@@ -177,6 +243,86 @@ async function runAllTests() {
     summaryLine.classList.add(passed === total ? "pass" : "fail");
 }
 
+async function runSharedCanvasTest() {
+    const { BatchedRenderer, TimeSeriesRenderer } = await loadRendererModule();
+    const slot = createCanvasSlot("Shared Canvas Modes");
+    const canvas = slot.canvas;
+    const cssWidth = 360;
+    const cssHeight = 240;
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+    let batched;
+    let timeseries;
+    let instHandle = null;
+    try {
+        batched = new BatchedRenderer(canvas.id);
+        timeseries = new TimeSeriesRenderer(canvas.id);
+
+        resizeRendererForCanvas(batched, canvas, cssWidth, cssHeight);
+        resizeRendererForCanvas(timeseries, canvas, cssWidth, cssHeight);
+
+        const meshHandle = batched.register_mesh(buildSingleTriangle());
+        instHandle = batched.create_instance(
+            meshHandle,
+            rotationTranslationMatrix([0, 0, 0], 0),
+        );
+
+        batched.clear(0.1, 0.1, 0.12, 1);
+        batched.flush();
+        if (batched.instance_count() !== 1) {
+            throw new Error("shared canvas batched renderer should retain its instance");
+        }
+
+        const timestamps = buildTimeAxis(120, 0.15);
+        const lowSeries = mapSeries(timestamps, (t) => 42 + 10 * Math.sin(t * 0.35));
+        const highSeries = mapSeries(timestamps, (t) => 58 + 6 * Math.cos(t * 0.22));
+        const series = [
+            {
+                values: lowSeries,
+                color: new Float32Array([0.93, 0.56, 0.24, 0.95]),
+                lineWidth: 1.5,
+            },
+            {
+                values: highSeries,
+                color: new Float32Array([0.24, 0.68, 0.98, 0.9]),
+                lineWidth: 2.0,
+            },
+        ];
+
+        timeseries.set_series(timestamps, series);
+        timeseries.draw();
+        if (timeseries.series_count() !== series.length) {
+            throw new Error("shared canvas timeseries renderer should track all series");
+        }
+
+        batched.flush();
+        timeseries.draw();
+        slot.wrapper.classList.add("pass");
+    } catch (err) {
+        slot.wrapper.classList.add("fail");
+        throw err;
+    } finally {
+        try {
+            if (batched && instHandle !== null) {
+                batched.remove_instance(instHandle);
+                batched.flush();
+            }
+        } catch (err) {
+            console.warn("shared canvas cleanup (batched) failed", err);
+        }
+        try {
+            batched?.free?.();
+        } catch (err) {
+            console.warn("shared canvas batched free failed", err);
+        }
+        try {
+            timeseries?.free?.();
+        } catch (err) {
+            console.warn("shared canvas timeseries free failed", err);
+        }
+    }
+}
+
 async function withRenderer(label, fn) {
     const { BatchedRenderer } = await loadRendererModule();
     const slot = createCanvasSlot(label);
@@ -202,6 +348,21 @@ async function withRenderer(label, fn) {
             }
             renderer.free();
         }
+    }
+}
+
+async function withTimeseriesRenderer(label, fn) {
+    const { TimeSeriesRenderer } = await loadRendererModule();
+    const slot = createCanvasSlot(label);
+    const renderer = new TimeSeriesRenderer(slot.canvas.id);
+    try {
+        await fn({ renderer, canvas: slot.canvas, wrapper: slot.wrapper });
+        slot.wrapper.classList.add("pass");
+    } catch (err) {
+        slot.wrapper.classList.add("fail");
+        throw err;
+    } finally {
+        renderer.free();
     }
 }
 
@@ -288,6 +449,7 @@ function createCanvasSlot(label) {
     applyCanvasFilterState();
     return { wrapper, canvas };
 }
+
 
 async function setupOrbitCameraDemo({ renderer, canvas, wrapper }) {
     const { build_orbit_view, build_perspective } = await loadRendererModule();
@@ -419,6 +581,22 @@ function rotationTranslationMatrix(offset, angle) {
         z,
         1,
     ]);
+}
+
+function buildTimeAxis(sampleCount, step) {
+    const axis = new Float32Array(sampleCount);
+    for (let i = 0; i < sampleCount; i += 1) {
+        axis[i] = i * step;
+    }
+    return axis;
+}
+
+function mapSeries(timestamps, sampler) {
+    const values = new Float32Array(timestamps.length);
+    for (let i = 0; i < timestamps.length; i += 1) {
+        values[i] = sampler(timestamps[i], i);
+    }
+    return values;
 }
 
 function resizeRendererForCanvas(renderer, canvas, cssWidth, cssHeight) {
