@@ -1,32 +1,43 @@
 const resultsList = document.getElementById("results");
 const summaryLine = document.getElementById("summary");
 const canvasGallery = document.getElementById("canvas-gallery");
+const initialFilterKey = getInitialFilterKey();
+let activeCanvasFilter = initialFilterKey;
 let wasmModulePromise;
+applyCanvasFilterState();
 
 const tests = [
     {
-        name: "registers a mesh, queues it, and flush resets the instance count",
+        label: "Persistent Instances",
+        slug: slugify("Persistent Instances"),
         async run() {
-            await withRenderer("Register > Queue > Flush", async ({ renderer }) => {
-                const mesh = buildSingleTriangle();
-                const handle = renderer.register_mesh(mesh);
+            await withRenderer(
+                "Persistent Instances",
+                async ({ renderer }) => {
+                    const mesh = buildSingleTriangle();
+                    const meshHandle = renderer.register_mesh(mesh);
+                    const instanceHandle = renderer.create_instance(
+                        meshHandle,
+                        identityMatrix(),
+                    );
 
-                const transform = identityMatrix();
-                renderer.queue_instance(handle, transform);
-                const queued = renderer.queued_instances();
-                if (queued !== 1) {
-                    throw new Error(`expected 1 queued instance, saw ${queued}`);
-                }
+                    renderer.flush();
+                    renderer.flush();
 
-                renderer.flush();
-                if (renderer.queued_instances() !== 0) {
-                    throw new Error("flush should clear queued instances");
-                }
-            });
+                    const count = renderer.instance_count();
+                    if (count !== 1) {
+                        throw new Error(
+                            `expected persistent instance count to remain 1, saw ${count}`,
+                        );
+                    }
+                    return { keepAlive: false };
+                },
+            );
         },
     },
     {
-        name: "rejects meshes that are not stride aligned",
+        label: "Invalid Mesh Rejection",
+        slug: slugify("Invalid Mesh Rejection"),
         async run() {
             await withRenderer("Invalid Mesh Rejection", async ({ renderer }) => {
                 let threw = false;
@@ -42,33 +53,72 @@ const tests = [
         },
     },
     {
-        name: "enforces the per-batch instance limit",
+        label: "Instance Handles",
+        slug: slugify("Instance Handles"),
         async run() {
-            await withRenderer("Instance Limit Enforcement", async ({ renderer }) => {
+            await withRenderer("Instance Handles", async ({ renderer }) => {
                 const mesh = buildSingleTriangle();
-                const handle = renderer.register_mesh(mesh);
-                const transform = identityMatrix();
-                const limit = renderer.max_instances();
+                const meshHandle = renderer.register_mesh(mesh);
+                const handleA = renderer.create_instance(
+                    meshHandle,
+                    identityMatrix(),
+                );
+                const handleB = renderer.create_instance(
+                    meshHandle,
+                    rotationTranslationMatrix([0, 0, 0], 0),
+                );
 
-                for (let i = 0; i < limit; i += 1) {
-                    renderer.queue_instance(handle, transform);
-                }
+                const moved = rotationTranslationMatrix([1, 2, 3], Math.PI / 4);
+                renderer.set_instance_transform(handleA, moved);
+                renderer.flush();
 
-                let overflowed = false;
-                try {
-                    renderer.queue_instance(handle, transform);
-                } catch (_err) {
-                    overflowed = true;
-                }
-
-                if (!overflowed) {
-                    throw new Error("queuing past max_instances() should throw");
+                renderer.remove_instance(handleB);
+                const remaining = renderer.instance_count();
+                if (remaining !== 1) {
+                    throw new Error(
+                        `expected a single instance to remain, saw ${remaining}`,
+                    );
                 }
             });
         },
     },
     {
-        name: "interactive orbit camera uses Rust-built matrices",
+        label: "Dynamic Batches",
+        slug: slugify("Dynamic Batches"),
+        async run() {
+            await withRenderer("Dynamic Batches", async ({ renderer }) => {
+                const mesh = buildSingleTriangle();
+                const meshHandle = renderer.register_mesh(mesh);
+                const maxPerBatch = renderer.max_instances();
+                const target = maxPerBatch + 3;
+                const handles = [];
+
+                for (let i = 0; i < target; i += 1) {
+                    const matrix = rotationTranslationMatrix([i * 0.1, 0, 0], 0);
+                    handles.push(renderer.create_instance(meshHandle, matrix));
+                }
+
+                if (renderer.instance_count() !== target) {
+                    throw new Error(
+                        `expected ${target} instances to be active`,
+                    );
+                }
+
+                renderer.flush();
+                renderer.flush();
+
+                handles.forEach((handle) => renderer.remove_instance(handle));
+                renderer.flush();
+
+                if (renderer.instance_count() !== 0) {
+                    throw new Error("all instances should be removable");
+                }
+            });
+        },
+    },
+    {
+        label: "Orbit Camera Controls",
+        slug: slugify("Orbit Camera Controls"),
         async run() {
             await withRenderer(
                 "Orbit Camera Controls",
@@ -85,30 +135,46 @@ runAllTests().catch((err) => {
 });
 
 async function runAllTests() {
+    const filterKey = activeCanvasFilter;
+    const testsToRun = tests.filter(
+        (test) => !filterKey || test.slug === filterKey,
+    );
+
+    if (testsToRun.length === 0) {
+        summaryLine.textContent = filterKey
+            ? `No tests matched the filter "${filterKey}".`
+            : "No tests to run.";
+        summaryLine.classList.remove("pass");
+        summaryLine.classList.add("fail");
+        return;
+    }
+
     let passed = 0;
-    for (const test of tests) {
+    for (const test of testsToRun) {
         const li = document.createElement("li");
-        li.textContent = `Running ${test.name}…`;
+        li.textContent = `Running ${test.label}…`;
         resultsList.appendChild(li);
+        wireResultFilterControls(li, test.slug);
+        applyCanvasFilterState();
         try {
             await test.run();
-            li.textContent = `✅ ${test.name}`;
+            li.textContent = `✅ ${test.label}`;
             li.classList.add("pass");
             passed += 1;
         } catch (err) {
-            li.textContent = `❌ ${test.name}: ${err?.message ?? err}`;
+            li.textContent = `❌ ${test.label}: ${err?.message ?? err}`;
             li.classList.add("fail");
-            console.error(`Test "${test.name}" failed`, err);
+            console.error(`Test "${test.label}" failed`, err);
         }
     }
 
-    if (passed === tests.length) {
-        summaryLine.textContent = `${passed}/${tests.length} tests passing`;
-        summaryLine.classList.add("pass");
-    } else {
-        summaryLine.textContent = `${passed}/${tests.length} tests passing`;
-        summaryLine.classList.add("fail");
-    }
+    const total = testsToRun.length;
+    const summary = `${passed}/${total} tests passing${
+        filterKey ? " (filtered)" : ""
+    }`;
+    summaryLine.textContent = summary;
+    summaryLine.classList.remove("pass", "fail");
+    summaryLine.classList.add(passed === total ? "pass" : "fail");
 }
 
 async function withRenderer(label, fn) {
@@ -212,10 +278,14 @@ function createCanvasSlot(label) {
     const canvas = document.createElement("canvas");
     canvas.width = 200;
     canvas.height = 200;
-    canvas.id = `test-canvas-${slugify(label)}-${Math.floor(performance.now())}`;
+    const filterKey = slugify(label);
+    canvas.id = `test-canvas-${filterKey}-${Math.floor(performance.now())}`;
+    wrapper.dataset.filterKey = filterKey;
     wrapper.appendChild(title);
     wrapper.appendChild(canvas);
     canvasGallery.appendChild(wrapper);
+    wireCanvasFilterControls(wrapper, title, filterKey);
+    applyCanvasFilterState();
     return { wrapper, canvas };
 }
 
@@ -252,6 +322,9 @@ async function setupOrbitCameraDemo({ renderer, canvas, wrapper }) {
         [2, 0, 2],
         [0, 1.5, -3],
     ];
+    const instanceHandles = sceneOffsets.map((offset) =>
+        renderer.create_instance(meshHandle, rotationTranslationMatrix(offset, 0)),
+    );
 
     const pointerState = {
         active: false,
@@ -309,10 +382,11 @@ async function setupOrbitCameraDemo({ renderer, canvas, wrapper }) {
         const view = build_orbit_view(target, yaw, pitch, distance);
         renderer.set_view_matrix(view);
 
-        sceneOffsets.forEach((offset, index) => {
+        instanceHandles.forEach((handle, index) => {
+            const offset = sceneOffsets[index];
             const angle = time * 0.001 + index * 0.5;
             const matrix = rotationTranslationMatrix(offset, angle);
-            renderer.queue_instance(meshHandle, matrix);
+            renderer.set_instance_transform(handle, matrix);
         });
 
         renderer.flush();
@@ -356,9 +430,106 @@ function resizeRendererForCanvas(renderer, canvas, cssWidth, cssHeight) {
     renderer.resize(width, height);
 }
 
+function getInitialFilterKey() {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("test");
+    return normalizeFilterKey(raw);
+}
+
+function normalizeFilterKey(value) {
+    return value ? slugify(value) : null;
+}
+
 function slugify(label) {
     return label
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
+}
+
+function wireCanvasFilterControls(wrapper, title, filterKey) {
+    if (!filterKey) {
+        return;
+    }
+    title.setAttribute("role", "button");
+    title.setAttribute("aria-pressed", "false");
+    title.tabIndex = 0;
+    const toggle = () => {
+        toggleCanvasFilter(filterKey);
+    };
+    title.addEventListener("click", toggle);
+    title.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+        }
+    });
+}
+
+function toggleCanvasFilter(filterKey) {
+    setActiveCanvasFilter(activeCanvasFilter === filterKey ? null : filterKey);
+}
+
+function setActiveCanvasFilter(newKey) {
+    if (activeCanvasFilter === newKey) {
+        return;
+    }
+    activeCanvasFilter = newKey;
+    const url = updateFilterQueryParam();
+    applyCanvasFilterState();
+    window.location.assign(url);
+}
+
+function applyCanvasFilterState() {
+    const wrappers = canvasGallery.querySelectorAll(".canvas-wrapper");
+    wrappers.forEach((wrapper) => {
+        const matches =
+            !activeCanvasFilter || wrapper.dataset.filterKey === activeCanvasFilter;
+        wrapper.classList.toggle("hidden", !matches);
+        wrapper.classList.toggle("focused-filter", Boolean(activeCanvasFilter && matches));
+        const title = wrapper.querySelector("h3");
+        if (title) {
+            title.setAttribute(
+                "aria-pressed",
+                activeCanvasFilter && matches ? "true" : "false",
+            );
+        }
+    });
+    canvasGallery.classList.toggle("has-filter", Boolean(activeCanvasFilter));
+
+    const resultItems = resultsList.querySelectorAll("li[data-filter-key]");
+    resultItems.forEach((item) => {
+        const matches = activeCanvasFilter && item.dataset.filterKey === activeCanvasFilter;
+        item.classList.toggle("focused-filter", Boolean(matches));
+        item.setAttribute("aria-pressed", matches ? "true" : "false");
+    });
+}
+
+function wireResultFilterControls(element, filterKey) {
+    if (!filterKey) {
+        return;
+    }
+    element.dataset.filterKey = filterKey;
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-pressed", "false");
+    element.tabIndex = 0;
+    const toggle = () => toggleCanvasFilter(filterKey);
+    element.addEventListener("click", toggle);
+    element.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+        }
+    });
+}
+
+function updateFilterQueryParam() {
+    const url = new URL(window.location.href);
+    if (activeCanvasFilter) {
+        url.searchParams.set("test", activeCanvasFilter);
+    } else {
+        url.searchParams.delete("test");
+    }
+    window.history.replaceState(null, "", url.toString());
+    return url.toString();
 }

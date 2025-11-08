@@ -24,6 +24,14 @@
         }
         li {
             margin-bottom: 0.35rem;
+            transition: background 0.2s;
+        }
+        li[role="button"] {
+            cursor: pointer;
+        }
+        li:focus-visible {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
         }
         li.pass {
             color: #065f46;
@@ -31,6 +39,11 @@
         li.fail {
             color: #b91c1c;
             font-weight: 600;
+        }
+        li.focused-filter {
+            background: #dbeafe;
+            border-radius: 4px;
+            padding-left: 0.35rem;
         }
         #canvas-panel {
             margin-top: 2rem;
@@ -57,6 +70,33 @@
             margin: 0 0 0.25rem 0;
             font-size: 0.9rem;
             color: #374151;
+            cursor: pointer;
+            user-select: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        .canvas-wrapper h3:focus-visible {
+            outline: 2px solid #2563eb;
+            outline-offset: 2px;
+        }
+        .canvas-wrapper.hidden {
+            display: none;
+        }
+        .canvas-wrapper.focused-filter {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+        }
+        #canvas-gallery.has-filter:before {
+            content: "Filtered view: click the highlighted title to reset.";
+            grid-column: 1 / -1;
+            font-size: 0.85rem;
+            color: #1f2937;
+        }
+        .filter-tip {
+            font-size: 0.9rem;
+            color: #4b5563;
+            margin-top: 0.5rem;
         }
         .canvas-wrapper canvas {
             display: block;
@@ -76,6 +116,10 @@
 <body>
     <h1>Renderer Browser Tests</h1>
     <p id="summary">Preparing tests…</p>
+    <p class="filter-tip">
+        Tip: click any test title or pass/fail row to reload with only that canvas running (state
+        persists via the <code>?test=</code> URL parameter). Click again to show all tests.
+    </p>
     <ul id="results"></ul>
     <section id="canvas-panel">
         <h2>Test Canvases</h2>
