@@ -1,48 +1,101 @@
 use js_sys::{Array, Float32Array, Object, Reflect};
-use wasm_bindgen::JsCast;
+use std::cell::RefCell;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
-use web_sys::{
-    HtmlCanvasElement, WebGl2RenderingContext as Gl, WebGlBuffer, WebGlProgram,
-    WebGlUniformLocation,
-};
+use wasm_bindgen::JsCast;
+use wasm_bindgen::JsValue;
+use web_sys::{WebGl2RenderingContext as Gl, WebGlProgram, WebGlUniformLocation};
 
+use crate::context::{shared_context, SharedContext};
+use crate::gpu::GlBuffer;
 use crate::shader::{
     compile_shader, link_program, timeseries_fragment_shader_source,
     timeseries_vertex_shader_source,
 };
-use crate::{clamp_unit, error};
+use crate::utils::{array_to_vec, clamp_unit, error};
 
 #[wasm_bindgen]
 pub struct TimeSeriesRenderer {
-    gl: Gl,
-    program: WebGlProgram,
-    position_location: u32,
-    color_location: WebGlUniformLocation,
-    canvas: HtmlCanvasElement,
-    lines: Vec<LineSeries>,
-    clear_color: [f32; 4],
-    time_range: [f32; 2],
-    value_range: [f32; 2],
-    sample_count: u32,
-    line_width_limits: [f32; 2],
+    inner: Rc<RefCell<TimeSeriesRendererInner>>,
 }
 
 #[wasm_bindgen]
 impl TimeSeriesRenderer {
     #[wasm_bindgen(constructor)]
     pub fn new(canvas_id: &str) -> Result<TimeSeriesRenderer, JsValue> {
-        let window = web_sys::window().ok_or_else(|| error("missing window"))?;
-        let document = window.document().ok_or_else(|| error("missing document"))?;
-        let canvas = document
-            .get_element_by_id(canvas_id)
-            .ok_or_else(|| error("canvas not found"))?
-            .dyn_into::<HtmlCanvasElement>()?;
+        let context = shared_context(canvas_id)?;
+        TimeSeriesRenderer::with_shared_context(context)
+    }
 
-        let gl: Gl = canvas
-            .get_context("webgl2")?
-            .ok_or_else(|| error("webgl2 context unavailable"))?
-            .dyn_into()?;
+    pub fn resize(&self, width: u32, height: u32) {
+        let context = self.context_handle();
+        context.resize(width, height);
+    }
 
+    pub fn clear(&self, r: f32, g: f32, b: f32, a: f32) {
+        let color = [clamp_unit(r), clamp_unit(g), clamp_unit(b), clamp_unit(a)];
+        let context = self.context_handle();
+        context.clear(color, None);
+    }
+
+    pub fn set_series(&self, timestamps: &Float32Array, series: &Array) -> Result<(), JsValue> {
+        self.inner.borrow_mut().set_series(timestamps, series)
+    }
+
+    pub fn draw(&self) -> Result<(), JsValue> {
+        self.inner.borrow_mut().render_pass()
+    }
+
+    pub fn series_count(&self) -> u32 {
+        self.inner.borrow().series_count()
+    }
+
+    pub fn sample_count(&self) -> u32 {
+        self.inner.borrow().sample_count()
+    }
+
+    pub fn time_domain(&self) -> Float32Array {
+        Float32Array::from(self.inner.borrow().time_range.as_slice())
+    }
+
+    pub fn value_domain(&self) -> Float32Array {
+        Float32Array::from(self.inner.borrow().value_range.as_slice())
+    }
+}
+
+impl TimeSeriesRenderer {
+    pub(crate) fn with_shared_context(context: SharedContext) -> Result<Self, JsValue> {
+        let inner = TimeSeriesRendererInner::new(context)?;
+        Ok(TimeSeriesRenderer {
+            inner: Rc::new(RefCell::new(inner)),
+        })
+    }
+
+    pub(crate) fn inner(&self) -> Rc<RefCell<TimeSeriesRendererInner>> {
+        self.inner.clone()
+    }
+
+    fn context_handle(&self) -> SharedContext {
+        self.inner.borrow().context.clone()
+    }
+}
+
+pub(crate) struct TimeSeriesRendererInner {
+    pub(crate) context: SharedContext,
+    gl: Gl,
+    program: WebGlProgram,
+    position_location: u32,
+    color_location: WebGlUniformLocation,
+    lines: Vec<LineSeries>,
+    time_range: [f32; 2],
+    value_range: [f32; 2],
+    sample_count: u32,
+    line_width_limits: [f32; 2],
+}
+
+impl TimeSeriesRendererInner {
+    fn new(context: SharedContext) -> Result<Self, JsValue> {
+        let gl = context.gl_clone();
         gl.disable(Gl::DEPTH_TEST);
         gl.disable(Gl::CULL_FACE);
         gl.enable(Gl::BLEND);
@@ -50,11 +103,8 @@ impl TimeSeriesRenderer {
 
         let vert_shader =
             compile_shader(&gl, Gl::VERTEX_SHADER, timeseries_vertex_shader_source())?;
-        let frag_shader = compile_shader(
-            &gl,
-            Gl::FRAGMENT_SHADER,
-            timeseries_fragment_shader_source(),
-        )?;
+        let frag_shader =
+            compile_shader(&gl, Gl::FRAGMENT_SHADER, timeseries_fragment_shader_source())?;
         let program = link_program(&gl, &vert_shader, &frag_shader)?;
 
         let position_location = gl
@@ -64,59 +114,41 @@ impl TimeSeriesRenderer {
         let color_location = gl
             .get_uniform_location(&program, "u_color")
             .ok_or_else(|| error("u_color uniform missing"))?;
-
         let line_width_limits = query_line_width_limits(&gl);
 
-        let mut renderer = TimeSeriesRenderer {
+        Ok(TimeSeriesRendererInner {
+            context,
             gl,
             program,
             position_location,
             color_location,
-            canvas,
             lines: Vec::new(),
-            clear_color: [0.02, 0.02, 0.05, 1.0],
             time_range: [0.0, 0.0],
             value_range: [0.0, 0.0],
             sample_count: 0,
             line_width_limits,
-        };
-
-        renderer.gl.use_program(Some(&renderer.program));
-        renderer.gl.clear_color(
-            renderer.clear_color[0],
-            renderer.clear_color[1],
-            renderer.clear_color[2],
-            renderer.clear_color[3],
-        );
-
-        let width = renderer.canvas.width().max(1);
-        let height = renderer.canvas.height().max(1);
-        renderer.resize(width, height);
-
-        Ok(renderer)
+        })
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        let width = width.max(1);
-        let height = height.max(1);
-        self.canvas.set_width(width);
-        self.canvas.set_height(height);
-        self.gl.viewport(0, 0, width as i32, height as i32);
+    pub(crate) fn render_pass(&mut self) -> Result<(), JsValue> {
+        self.gl.use_program(Some(&self.program));
+        self.gl.disable(Gl::DEPTH_TEST);
+        self.gl.disable(Gl::CULL_FACE);
+        self.gl.enable(Gl::BLEND);
+        self.gl
+            .blend_func(Gl::SRC_ALPHA, Gl::ONE_MINUS_SRC_ALPHA);
+
+        self.gl.enable_vertex_attrib_array(self.position_location);
+        for line in &self.lines {
+            line.draw(&self.gl, self.position_location, &self.color_location);
+        }
+        self.gl
+            .disable_vertex_attrib_array(self.position_location);
+        Ok(())
     }
 
-    pub fn clear(&mut self, r: f32, g: f32, b: f32, a: f32) {
-        self.clear_color = [clamp_unit(r), clamp_unit(g), clamp_unit(b), clamp_unit(a)];
-        self.gl.clear_color(
-            self.clear_color[0],
-            self.clear_color[1],
-            self.clear_color[2],
-            self.clear_color[3],
-        );
-        self.gl.clear(Gl::COLOR_BUFFER_BIT);
-    }
-
-    pub fn set_series(&mut self, timestamps: &Float32Array, series: &Array) -> Result<(), JsValue> {
-        let samples = timestamps.to_vec();
+    fn set_series(&mut self, timestamps: &Float32Array, series: &Array) -> Result<(), JsValue> {
+        let samples = array_to_vec(timestamps);
         let sample_count = samples.len();
         if sample_count == 0 {
             if series.length() != 0 {
@@ -130,11 +162,10 @@ impl TimeSeriesRenderer {
         }
 
         let (time_min, time_max) = compute_range("timestamp", &samples)?;
-
         let (staged_lines, value_min, value_max) =
             stage_series(series, sample_count, self.line_width_limits)?;
 
-        let mut gpu_lines = Vec::with_capacity(staged_lines.len());
+        let mut active = 0usize;
         for staged in staged_lines {
             let positions = build_positions(
                 &samples,
@@ -144,51 +175,39 @@ impl TimeSeriesRenderer {
                 value_min,
                 value_max,
             );
-            gpu_lines.push(LineSeries::from_positions(
-                &self.gl,
-                &positions,
-                staged.color,
-                staged.line_width,
-            )?);
+            if let Some(existing) = self.lines.get_mut(active) {
+                existing.update(&self.gl, &positions, staged.color, staged.line_width)?;
+            } else {
+                self.lines.push(LineSeries::from_positions(
+                    &self.gl,
+                    &positions,
+                    staged.color,
+                    staged.line_width,
+                )?);
+            }
+            active += 1;
         }
+        self.lines.truncate(active);
 
-        self.lines = gpu_lines;
         self.sample_count = sample_count as u32;
         self.time_range = [time_min, time_max];
         self.value_range = [value_min, value_max];
         Ok(())
     }
 
-    pub fn draw(&mut self) -> Result<(), JsValue> {
-        self.gl.use_program(Some(&self.program));
-        self.gl.enable_vertex_attrib_array(self.position_location);
-        for line in &self.lines {
-            line.draw(&self.gl, self.position_location, &self.color_location);
-        }
-        self.gl.disable_vertex_attrib_array(self.position_location);
-        Ok(())
-    }
-
-    pub fn series_count(&self) -> u32 {
+    fn series_count(&self) -> u32 {
         self.lines.len() as u32
     }
 
-    pub fn sample_count(&self) -> u32 {
+    fn sample_count(&self) -> u32 {
         self.sample_count
-    }
-
-    pub fn time_domain(&self) -> Float32Array {
-        Float32Array::from(self.time_range.as_slice())
-    }
-
-    pub fn value_domain(&self) -> Float32Array {
-        Float32Array::from(self.value_range.as_slice())
     }
 }
 
 struct LineSeries {
-    buffer: WebGlBuffer,
+    buffer: GlBuffer,
     point_count: i32,
+    capacity: usize,
     color: [f32; 4],
     line_width: f32,
 }
@@ -200,25 +219,45 @@ impl LineSeries {
         color: [f32; 4],
         line_width: f32,
     ) -> Result<Self, JsValue> {
-        let buffer = gl
-            .create_buffer()
-            .ok_or_else(|| error("failed to create line buffer"))?;
-        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&buffer));
+        let buffer = GlBuffer::new(gl)?;
+        buffer.bind_array_buffer();
         let view = unsafe { Float32Array::view(positions) };
         gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STATIC_DRAW);
         Ok(Self {
             buffer,
             point_count: (positions.len() / 2) as i32,
+            capacity: positions.len(),
             color,
             line_width,
         })
+    }
+
+    fn update(
+        &mut self,
+        gl: &Gl,
+        positions: &[f32],
+        color: [f32; 4],
+        line_width: f32,
+    ) -> Result<(), JsValue> {
+        self.point_count = (positions.len() / 2) as i32;
+        self.buffer.bind_array_buffer();
+        let view = unsafe { Float32Array::view(positions) };
+        if positions.len() > self.capacity {
+            gl.buffer_data_with_array_buffer_view(Gl::ARRAY_BUFFER, &view, Gl::STATIC_DRAW);
+            self.capacity = positions.len();
+        } else {
+            gl.buffer_sub_data_with_f64_and_array_buffer_view(Gl::ARRAY_BUFFER, 0.0, &view);
+        }
+        self.color = color;
+        self.line_width = line_width;
+        Ok(())
     }
 
     fn draw(&self, gl: &Gl, position_location: u32, color_location: &WebGlUniformLocation) {
         if self.point_count <= 0 {
             return;
         }
-        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(&self.buffer));
+        gl.bind_buffer(Gl::ARRAY_BUFFER, Some(self.buffer.handle()));
         gl.vertex_attrib_pointer_with_i32(position_location, 2, Gl::FLOAT, false, 0, 0);
         gl.uniform4fv_with_f32_array(Some(color_location), &self.color);
         gl.line_width(self.line_width);
@@ -261,7 +300,8 @@ fn stage_series(
                 "series[{index}].values must match timestamp length"
             )));
         }
-        let values = values_array.to_vec();
+        let mut values = vec![0.0; sample_count];
+        values_array.copy_to(&mut values);
         for value in &values {
             if !value.is_finite() {
                 return Err(error("series values must be finite floats"));
@@ -301,18 +341,18 @@ fn extract_color(object: &Object, index: usize) -> Result<[f32; 4], JsValue> {
     let color_array = color_value
         .dyn_into::<Float32Array>()
         .map_err(|_| error(&format!("series[{index}].color must be Float32Array")))?;
-    let color_vec = color_array.to_vec();
-    if color_vec.len() < 3 {
+    if color_array.length() < 3 {
         return Err(error(&format!(
             "series[{index}].color requires at least three components"
         )));
     }
-
     let mut color = [0.0; 4];
-    for i in 0..color_vec.len().min(4) {
-        color[i] = clamp_unit(color_vec[i]);
+    let mut buffer = vec![0.0; color_array.length() as usize];
+    color_array.copy_to(&mut buffer);
+    for i in 0..buffer.len().min(4) {
+        color[i] = clamp_unit(buffer[i]);
     }
-    if color_vec.len() < 4 {
+    if buffer.len() < 4 {
         color[3] = 1.0;
     }
     Ok(color)

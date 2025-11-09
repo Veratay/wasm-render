@@ -91,7 +91,4 @@ impl InstanceStore {
         self.active_handles.is_empty()
     }
 
-    pub(crate) fn handle_at(&self, index: usize) -> Option<u32> {
-        self.active_handles.get(index).copied()
-    }
 }
